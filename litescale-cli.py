@@ -1,12 +1,13 @@
-#!/usr/bin/env python
-from PyInquirer import prompt, Separator, Validator
-from os.path import isfile
-import os
+# File: litescale-cli.py
+
+import json
+from PyInquirer import prompt, Separator
 from litescale import *
+import os
+
 
 def clear():
-    os.system('cls')
-    os.system('clear')
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 question_main = [
     {
@@ -14,22 +15,22 @@ question_main = [
         'name': 'main',
         'message': 'Welcome to Litescale',
         'choices': [
-            {'name':'Start/continue annotation',
-             'value':'start',
-             'short':'start'},
-            {'name':'Generate gold standard',
-             'value':'gold',
-             'short':'gold'},
-            {'name':'Create a new annotation project',
-             'value':'new',
-             'short':'new'},
-            {'name':'Log out',
-             'value':'logout',
-             'short':'logout'},
-             Separator(),
-            {'name':'Exit',
-             'value':'exit',
-             'short':'exit'}
+            {'name': 'Start/continue annotation',
+             'value': 'start',
+             'short': 'start'},
+            {'name': 'Generate gold standard',
+             'value': 'gold',
+             'short': 'gold'},
+            {'name': 'Create a new annotation project',
+             'value': 'new',
+             'short': 'new'},
+            {'name': 'Log out',
+             'value': 'logout',
+             'short': 'logout'},
+            Separator(),
+            {'name': 'Exit',
+             'value': 'exit',
+             'short': 'exit'}
         ]
     }
 ]
@@ -82,23 +83,24 @@ questions_new = [
 def prompt_bws(tup, phenomenon, best=True, exclude=[]):
     clear()
     if best:
-        message = 'which is the MOST {0}?'.format(phenomenon)
+        message = f'Which are the MOST {phenomenon}? (Select one or more, press Enter to skip)'
     else:
-        message = 'which is the LEAST {0}?'.format(phenomenon)
+        message = f'Which are the LEAST {phenomenon}? (Select one or more, press Enter to skip)'
     questions_bws = [
         {
-            'type': 'list',
-            'name': 'value',
+            'type': 'checkbox',
+            'name': 'values',
             'message': message,
-            'choices': [{"name":x["text"], "value":x["id"], "short":x["text"]} for x in tup if not x["id"] in exclude]+[Separator(),"PROGRESS","EXIT"]
+            'choices': [{"name": f"{x['text']} ", "value": x["id"], "short": x["text"]} for x in tup if x["id"] not in exclude] + [{"name": " PROGRESS", "value": "PROGRESS"}, {"name": " EXIT", "value": "EXIT"}],
+            'validate': lambda answer: True if 'PROGRESS' in answer or 'EXIT' in answer or len(answer) > 0 else 'You must choose at least one option.'
         }
     ]
 
-    return prompt(questions_bws)['value']
+    return prompt(questions_bws)['values']
 
 def prompt_progress(project_name, user_name):
     done, total = progress(project_name, user_name)
-    message = "progress: {0}/{1} {2:.1f}%".format(done, total, 100.0*(done/total))
+    message = f"Progress: {done}/{total} ({100.0 * (done / total):.1f}%)"
     question_progress = [
         {
             'type': 'confirm',
@@ -107,7 +109,7 @@ def prompt_progress(project_name, user_name):
             'default': True
         }
     ]
-    prompt(question_progress)
+    return prompt(question_progress)['continue']
 
 # login
 def login():
@@ -115,7 +117,7 @@ def login():
     try:
         with open(".login") as f:
             default = f.read()
-    except:
+    except FileNotFoundError:
         default = ""
 
     question_login = [
@@ -140,37 +142,47 @@ while True:
     main_choice = prompt(question_main)['main']
     if main_choice == 'start':
         if len(project_list()) == 0:
-            print ("there are no projects")
+            print("There are no projects.")
             continue
         project_name = prompt(questions_start)['project_name']
         project_dict = get_project(project_name)
         while True:
             tup_id, tup = next_tuple(project_name, user_name)
             if tup_id is None:
-                print ("there are no tuple to annotate, exiting")
+                print("There are no tuples to annotate, exiting.")
                 break
-            answer_best = prompt_bws(tup, project_dict["phenomenon"])
-            if answer_best=="EXIT":
+            answer_best = prompt_bws(tup, project_dict["phenomenon"], best=True)
+            if "EXIT" in answer_best:
                 break
-            if answer_best=="PROGRESS":
-                prompt_progress(project_name, user_name)
+            if "PROGRESS" in answer_best:
+                if not prompt_progress(project_name, user_name):
+                    break
                 continue
-            answer_worst = prompt_bws(tup, project_dict["phenomenon"], False, exclude=[answer_best])
-            if answer_worst=="EXIT":
-                break
-            if answer_worst=="PROGRESS":
-                prompt_progress(project_name, user_name)
+            if not answer_best:
+                print("No selection made for 'best'. Moving to the next tuple.")
                 continue
+
+            answer_worst = prompt_bws(tup, project_dict["phenomenon"], best=False, exclude=answer_best)
+            if "EXIT" in answer_worst:
+                break
+            if "PROGRESS" in answer_worst:
+                if not prompt_progress(project_name, user_name):
+                    break
+                continue
+            if not answer_worst:
+                print("No selection made for 'worst'. Moving to the next tuple.")
+                continue
+
             annotate(project_name, user_name, tup_id, answer_best, answer_worst)
     elif main_choice == 'gold':
         if len(project_list()) == 0:
-            print ("there are no projects")
+            print("There are no projects.")
             continue
         project_name = prompt(questions_start)['project_name']
         if empty_annotation(project_name):
-            print ("there are no annotations, exiting")
+            print("There are no annotations, exiting.")
             continue
-        gold(project_name)
+        calculate_contextual_scores(project_name)
     elif main_choice == 'new':
         answers = prompt(questions_new)
         new_project(
@@ -179,7 +191,7 @@ while True:
             answers['tuple_size'],
             answers['replication'],
             answers['instance_file']
-            )
+        )
     elif main_choice == 'logout':
         user_name = login()
     elif main_choice == 'exit':
